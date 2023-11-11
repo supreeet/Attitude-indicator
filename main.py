@@ -1,7 +1,50 @@
-from machine import Pin,I2C,SPI,PWM,ADC
-import framebuf
-import time
+from machine import Pin, I2C, SPI, PWM, ADC, UART, Timer
+import time, framebuf, math
 from bmp280 import *
+from micropyGPS import MicropyGPS
+from sx127x import SX127x
+from examples import LoRaSender
+from examples import LoRaReceiver
+
+def rotate_coordinates(x, y, angle_degrees):
+    # Convert angle from degrees to radians
+    angle_radians = math.radians(angle_degrees)
+
+    # Clockwise rotation formulas
+    new_x = x * math.cos(angle_radians) + y * math.sin(angle_radians)
+    new_y = -x * math.sin(angle_radians) + y * math.cos(angle_radians)
+
+    return new_x, new_y
+
+
+def math_conversion(a1,b1,a2,b2,rotation_angle,elevation):
+    a1 = a1 - 120
+    b1 = b1 - 120
+    a2 = a2 - 120
+    b2 = b2 - 120
+    x1, y1 = rotate_coordinates(a1,b1,rotation_angle)
+    x2, y2 = rotate_coordinates(a2,b2,rotation_angle)
+    return int(x1+120),int(y1+90+elevation),int(x2+120),int(y2+90+elevation)
+
+    
+gps_module = UART(0, baudrate=9600, rx=Pin(1))
+TIMEZONE = 5
+my_gps = MicropyGPS(TIMEZONE)
+def convert(parts):
+    if (parts[0] == 0):
+        return None
+        
+    data = parts[0]+(parts[1]/60.0)
+    # parts[2] contain 'E' or 'W' or 'N' or 'S'
+    if (parts[2] == 'S'):
+        data = -data
+    if (parts[2] == 'W'):
+        data = -data
+
+    data = '{0:.6f}'.format(data) # to 6 decimal places
+    return str(data)
+
+
 I2C_SDA = 6
 I2C_SDL = 7
 
@@ -12,6 +55,10 @@ MOSI = 11
 RST = 12
 
 Vbat_Pin = 29
+
+buzzer = PWM(Pin(14))
+buzzer.freq(600)
+buzzer.duty_u16(0)
 
 lcd_backlight = PWM(Pin(25))
 lcd_backlight.freq(1000)
@@ -103,6 +150,19 @@ def key2_callback(pin):
     if x < 2:
         key_debounce_timer = time.ticks_ms()
         return
+    for i in range(1000,50,-25):
+        buzzer.duty_u16(0)
+        time.sleep_ms(i)
+        buzzer.duty_u16(5000)
+        time.sleep_ms(i)
+
+    for i in range(50,0,-1):
+        buzzer.duty_u16(0)
+        time.sleep_ms(i)
+        buzzer.duty_u16(5000)
+        time.sleep_ms(i)
+    time.sleep(1)
+    buzzer.duty_u16(0)
     key_debounce_timer = time.ticks_ms()
     
 key2.irq(trigger=Pin.IRQ_FALLING, handler=key2_callback)
@@ -127,7 +187,7 @@ def key3_callback(pin):
         return
     key_debounce_timer = time.ticks_ms()
     
-key3.irq(trigger=Pin.IRQ_FALLING, handler=key3_callback)
+#key3.irq(trigger=Pin.IRQ_FALLING, handler=key3_callback)
 
 
 bmp280_object = BMP280(I2C(1, sda = Pin(6), scl = Pin(7), freq = 400000),addr = 0x76, use_case = BMP280_CASE_WEATHER)
@@ -460,7 +520,7 @@ class LCD_1inch28(framebuf.FrameBuffer):
 class QMI8658(object):
     def __init__(self,address=0X6B):
         self._address = address
-        self._bus = I2C(id=1,scl=Pin(I2C_SDL),sda=Pin(I2C_SDA),freq=100_000)
+        self._bus = I2C(id=1,scl=Pin(I2C_SDL),sda=Pin(I2C_SDA))
         bRet=self.WhoAmI()
         if bRet :
             self.Read_Revision()
@@ -530,6 +590,7 @@ class QMI8658(object):
             xyz[i+3]=raw_xyz[i+3]*1.0/gyro_lsb_div
         return xyz
 
+
 def color565(red, green=0, blue=0):
     """
     Convert red, green and blue values (0-255) into a 16-bit 565 encoded color.
@@ -539,40 +600,94 @@ def color565(red, green=0, blue=0):
     except TypeError:
         pass
     return (red & 0xf8) << 8 | (green & 0xfc) << 3 | blue >> 3
-
+color1 = color565(20,20,20)
+color2 = color565(0,28,100)
 LCD = LCD_1inch28()
-# LCD.fill_rect(0,0,240,240,color565(0,0,0))
-# LCD.text("IT'S YOUR SKY",70,120,LCD.white)
-# LCD.show()
-# time.sleep_ms(10)
+
+
+while True:
+    if key3()==0:
+        break
+    LCD.fill(color565(0,0,0))
+    length = gps_module.any()
+    if length>0:
+        b = gps_module.read(length)
+        for x in b:
+            msg = my_gps.update(chr(x))
+    #_________________________________________________
+    latitude = convert(my_gps.latitude)
+    longitude = convert(my_gps.longitude)
+    #_________________________________________________
+    if (latitude == None and latitude == None):
+
+        LCD.text("no data",100,10,LCD.white)
+        LCD.show()
+        continue
+    #_________________________________________________
+    t = my_gps.timestamp
+    #t[0] => hours : t[1] => minutes : t[2] => seconds
+    gpsTime = '{:02d}:{:02d}:{:02}'.format(t[0], t[1], t[2])
+    
+    gpsdate = my_gps.date_string('long')
+    speed = my_gps.speed_string('kph') #'kph' or 'mph' or 'knot'
+    #_________________________________________________
+    print('Lat:', latitude)
+    print('Lng:', longitude)
+    print('time:', gpsTime)
+    print('Date:', gpsdate)
+    print('speed:', speed)
+    LCD.text(latitude,35,40,LCD.white)
+    LCD.text(longitude,28,50,LCD.white)
+    LCD.text((gpsTime),20,60,LCD.white)
+    LCD.text((speed),15,70,LCD.white)
+    LCD.show()
+    
+lora_default = {
+    'frequency': 469000000,
+    'frequency_offset':0,
+    'tx_power_level': 14,
+    'signal_bandwidth': 125e3,
+    'spreading_factor': 9,
+    'coding_rate': 10,
+    'preamble_length': 8,
+    'implicitHeader': False,
+    'sync_word': 0x12,
+    'enable_CRC': True,
+    'invert_IQ': False,
+    'debug': False,
+}
+
+lora_pins = {
+    'dio_0':27,
+    'ss':5,
+    'reset':15,
+    'sck':2,
+    'miso':4,
+    'mosi':3,
+}
+
+lora_spi = SPI(0,
+    baudrate=20_000_000, polarity=0, phase=0,
+    bits=8, firstbit=SPI.MSB,
+    sck=Pin(lora_pins['sck'], Pin.OUT, Pin.PULL_DOWN),
+    mosi=Pin(lora_pins['mosi'], Pin.OUT, Pin.PULL_UP),
+    miso=Pin(lora_pins['miso'], Pin.IN, Pin.PULL_UP),
+)
+lora = SX127x(lora_spi, pins=lora_pins, parameters=lora_default)
 
 
 qmi8658=QMI8658()
 Vbat= ADC(Pin(Vbat_Pin))   
-
-color1 = color565(20,20,20)
-color2 = color565(0,28,100)
-xyz=qmi8658.Read_XYZ()
-alt = 30 - (20*(xyz[2]))
-sample = 0
-
-LCD.fill_rect(0,0,240,119,color565(80,235,129))
-LCD.fill_rect(0,119,240,2,LCD.white) 
-LCD.fill_rect(0,121,240,60,0x29)
-
-LCD.fill_rect(90,80,60,1,LCD.white)
-LCD.fill_rect(105,90,30,1,LCD.white)
-LCD.fill_rect(95,100,50,1,LCD.white)
-LCD.fill_rect(105,110,30,1,LCD.white)
-
-LCD.fill_rect(90,160,60,1,LCD.white)
-LCD.fill_rect(105,150,30,1,LCD.white)
-LCD.fill_rect(95,140,50,1,LCD.white)
-LCD.fill_rect(105,130,30,1,LCD.white)
-
+temperature = bmp280_object.temperature
+pressure_hPa = ( bmp280_object.pressure * 0.01 )
+altitude = altitude_IBF(pressure_hPa)
+    
+    
 lcd_start_time1 = time.ticks_ms()
-while(True):
-
+x = 0
+def main_loop(source):
+    global lcd_start_time1, x
+    x = x + 1
     lcd_start_time = time.ticks_ms()
 
     temperature = bmp280_object.temperature
@@ -580,43 +695,49 @@ while(True):
     altitude = altitude_IBF(pressure_hPa)
     
     xyz = qmi8658.Read_XYZ()
-    sample = int(40 - (40*(xyz[2])))  
-    
-    
+    sample = int(40 - (40*(xyz[2])))
+    if xyz[0] < 0 :
+        rotation_q = (85*(xyz[1]))-10
+    if xyz[0] > 0 :
+        rotation_q = 190 - (85*(xyz[1]))
+    else:
+        rotation_q = 85*(xyz[1])
+        
     LCD.fill(color565(0,0,0))
+    
     LCD.fill_rect(0,0,240,119,color565(80,235,129))
     LCD.fill_rect(0,119,240,2,LCD.white) 
     LCD.fill_rect(0,121,240,120,0x29)
 
-    LCD.fill_rect(90,80,60,1,LCD.white)
-    LCD.fill_rect(105,90,30,1,LCD.white)
-    LCD.fill_rect(95,100,50,1,LCD.white)
-    LCD.fill_rect(105,110,30,1,LCD.white)
 
-    LCD.fill_rect(90,160,60,1,LCD.white)
-    LCD.fill_rect(105,150,30,1,LCD.white)
-    LCD.fill_rect(95,140,50,1,LCD.white)
-    LCD.fill_rect(105,130,30,1,LCD.white)
+    LCD.line(*math_conversion(45,105,105,105,rotation_q,sample), color2)
+    LCD.line(*math_conversion(105,105,105,120,rotation_q,sample), color2)
+    LCD.line(*math_conversion(105,120,135,120,rotation_q,sample), color2)
+    LCD.line(*math_conversion(135,105,135,120,rotation_q,sample), color2)
+    LCD.line(*math_conversion(135,105,195,105,rotation_q,sample), color2)
+
+    LCD.line(*math_conversion(45,104,106,104,rotation_q,sample), color2)
+    LCD.line(*math_conversion(106,104,106,119,rotation_q,sample), color2)
+    LCD.line(*math_conversion(106,119,134,119,rotation_q,sample), color2)
+    LCD.line(*math_conversion(134,119,134,104,rotation_q,sample), color2)
+    LCD.line(*math_conversion(134,104,195,104,rotation_q,sample), color2)
     
-    LCD.fill_rect(100,80+sample,40,5,color2)
-    LCD.fill_rect(95,65+sample,5,20,color2)
-    LCD.fill_rect(140,65+sample,5,20,color2) 
-    LCD.fill_rect(60,65+sample,40,8,color2)
-    LCD.fill_rect(140,65+sample,40,8,color2)
+    LCD.line(*math_conversion(45,106,104,106,rotation_q,sample), color2)
+    LCD.line(*math_conversion(136,106,195,106,rotation_q,sample), color2)
+    LCD.line(*math_conversion(45,103,104,103,rotation_q,sample), color2)
+    LCD.line(*math_conversion(136,103,195,103,rotation_q,sample), color2)
     
     LCD.text(str("{:.0f}".format(altitude)) + "M",102,10,LCD.white)
     LCD.text(str("{:.1f}".format(temperature)) + "C",102,20,LCD.white)
-    LCD.text("ACC_X={:+.2f}".format(xyz[0]),80,195,LCD.white)
-    LCD.text("ACC_Y={:+.2f}".format(xyz[1]),80,205,LCD.white)
-    LCD.text("ACC_Z={:+.2f}".format(xyz[2]),80,215,LCD.white)
 
     reading = Vbat.read_u16()*3.3/65535*2
     LCD.text("Vbat={:.2f}".format(reading),80,225,LCD.white)
+    
     LCD.show()
-#     if time.ticks_diff(time.ticks_ms(), lcd_start_time1)>200:
-#         time.ticks_diff(time.ticks_ms(), lcd_start_time)
-#         lcd_start_time1 = time.ticks_ms()
-#         print(time.ticks_diff(time.ticks_ms(), lcd_start_time))
-# 
-#     
-
+    if time.ticks_diff(time.ticks_ms(), lcd_start_time1)>1000:
+        lcd_start_time1 = time.ticks_ms()
+        print(x)
+        x = 0
+    
+main_timer = Timer(period=100, mode=Timer.PERIODIC, callback=main_loop)
+LoRaReceiver.receive(lora)
