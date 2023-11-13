@@ -1,81 +1,22 @@
 from machine import Pin, I2C, SPI, PWM, ADC, UART, Timer
-import time, framebuf, math
-from bmp280 import *
-from micropyGPS import MicropyGPS
-from sx127x import SX127x
-from examples import LoRaSender
-from examples import LoRaReceiver
-
-def rotate_coordinates(x, y, angle_degrees):
-    # Convert angle from degrees to radians
-    angle_radians = math.radians(angle_degrees)
-
-    # Clockwise rotation formulas
-    new_x = x * math.cos(angle_radians) + y * math.sin(angle_radians)
-    new_y = -x * math.sin(angle_radians) + y * math.cos(angle_radians)
-
-    return new_x, new_y
-
-
-def math_conversion(a1,b1,a2,b2,rotation_angle,elevation):
-    a1 = a1 - 120
-    b1 = b1 - 120
-    a2 = a2 - 120
-    b2 = b2 - 120
-    x1, y1 = rotate_coordinates(a1,b1,rotation_angle)
-    x2, y2 = rotate_coordinates(a2,b2,rotation_angle)
-    return int(x1+120),int(y1+90+elevation),int(x2+120),int(y2+90+elevation)
-
-    
-gps_module = UART(0, baudrate=9600, rx=Pin(1))
-TIMEZONE = 5
-my_gps = MicropyGPS(TIMEZONE)
-def convert(parts):
-    if (parts[0] == 0):
-        return None
-        
-    data = parts[0]+(parts[1]/60.0)
-    # parts[2] contain 'E' or 'W' or 'N' or 'S'
-    if (parts[2] == 'S'):
-        data = -data
-    if (parts[2] == 'W'):
-        data = -data
-
-    data = '{0:.6f}'.format(data) # to 6 decimal places
-    return str(data)
-
-
-I2C_SDA = 6
-I2C_SDL = 7
-
-DC = 8
-CS = 9
-SCK = 10
-MOSI = 11
-RST = 12
-
-Vbat_Pin = 29
-
+import time
 buzzer = PWM(Pin(14))
 buzzer.freq(600)
 buzzer.duty_u16(0)
 
 lcd_backlight = PWM(Pin(25))
 lcd_backlight.freq(1000)
-lcd_backlight.duty_u16(30000)
+lcd_backlight.duty_u16(65000)
 
 white_pwm = PWM(Pin(22)) 
 white_pwm.freq(1000)
 white_pwm.duty_u16(5)
-
 green_pwm = PWM(Pin(18))
 green_pwm.freq(1000)
 green_pwm.duty_u16(65000)
-
 orange_pwm = PWM(Pin(17))
 orange_pwm.freq(1000)
 orange_pwm.duty_u16(65000)
-
 red_pwm = PWM(Pin(16))
 red_pwm.freq(1000)
 red_pwm.duty_u16(65000)
@@ -118,15 +59,12 @@ def key1_callback(pin):
                 key_debounce_timer = time.ticks_ms()
                 return
         else:
-            white_pwm.duty_u16(3)
+            white_pwm.duty_u16(5)
         
     if x < 2:
         key_debounce_timer = time.ticks_ms()
         return
-#     if white_pwm.duty_u16() < 50001:
-#         white_pwm.duty_u16(white_pwm.duty_u16() + 1000)
-#     else:
-#         white_pwm.duty_u16(0)
+
     key_debounce_timer = time.ticks_ms()
     
     
@@ -150,21 +88,9 @@ def key2_callback(pin):
     if x < 2:
         key_debounce_timer = time.ticks_ms()
         return
-    for i in range(1000,50,-25):
-        buzzer.duty_u16(0)
-        time.sleep_ms(i)
-        buzzer.duty_u16(5000)
-        time.sleep_ms(i)
-
-    for i in range(50,0,-1):
-        buzzer.duty_u16(0)
-        time.sleep_ms(i)
-        buzzer.duty_u16(5000)
-        time.sleep_ms(i)
-    time.sleep(1)
-    buzzer.duty_u16(0)
-    key_debounce_timer = time.ticks_ms()
     
+    key_debounce_timer = time.ticks_ms()
+
 key2.irq(trigger=Pin.IRQ_FALLING, handler=key2_callback)
 
 def key3_callback(pin):
@@ -189,6 +115,147 @@ def key3_callback(pin):
     
 #key3.irq(trigger=Pin.IRQ_FALLING, handler=key3_callback)
 
+import framebuf, math
+from bmp280 import *
+from micropyGPS import MicropyGPS
+from sx127x import SX127x
+from examples import LoRaSender
+from examples import LoRaReceiver
+import sdcard, uos, re
+
+lora_default = {
+    'frequency': 469000000,
+    'frequency_offset':0,
+    'tx_power_level': 14,
+    'signal_bandwidth': 125e3,
+    'spreading_factor': 9,
+    'coding_rate': 10,
+    'preamble_length': 8,
+    'implicitHeader': False,
+    'sync_word': 0x12,
+    'enable_CRC': True,
+    'invert_IQ': False,
+    'debug': False,
+}
+
+lora_pins = {
+    'dio_0':27,
+    'ss':5,
+    'reset':15,
+    'sck':2,
+    'miso':4,
+    'mosi':3,
+}
+
+lora_spi = SPI(0,
+    baudrate=20_000_000, polarity=0, phase=0,
+    bits=8, firstbit=SPI.MSB,
+    sck=Pin(lora_pins['sck'], Pin.OUT, Pin.PULL_DOWN),
+    mosi=Pin(lora_pins['mosi'], Pin.OUT, Pin.PULL_UP),
+    miso=Pin(lora_pins['miso'], Pin.IN, Pin.PULL_UP),
+)
+lora = SX127x(lora_spi, pins=lora_pins, parameters=lora_default)
+
+
+def rotate_coordinates(x, y, angle_degrees):
+    # Convert angle from degrees to radians
+    angle_radians = math.radians(angle_degrees)
+
+    # Clockwise rotation formulas
+    new_x = x * math.cos(angle_radians) + y * math.sin(angle_radians)
+    new_y = -x * math.sin(angle_radians) + y * math.cos(angle_radians)
+
+    return new_x, new_y
+
+
+def math_conversion(a1,b1,a2,b2,rotation_angle,elevation):
+    a1 = a1 - 120
+    b1 = b1 - 120
+    a2 = a2 - 120
+    b2 = b2 - 120
+    x1, y1 = rotate_coordinates(a1,b1,rotation_angle)
+    x2, y2 = rotate_coordinates(a2,b2,rotation_angle)
+    return int(x1+120),int(y1+70+elevation),int(x2+120),int(y2+70+elevation)
+
+gps_module = UART(0, baudrate=9600, rx=Pin(1))
+TIMEZONE = 5
+my_gps = MicropyGPS(TIMEZONE)
+def convert(parts):
+    if (parts[0] == 0):
+        return None
+        
+    data = parts[0]+(parts[1]/60.0)
+    # parts[2] contain 'E' or 'W' or 'N' or 'S'
+    if (parts[2] == 'S'):
+        data = -data
+    if (parts[2] == 'W'):
+        data = -data
+
+    data = '{0:.6f}'.format(data) # to 6 decimal places
+    return str(data)
+
+######################       SD
+sd_inserted = True
+def sd_init():
+    global sd_inserted
+    cs = Pin(13, machine.Pin.OUT)
+    spi = SPI(0,
+                      baudrate=1000000,
+                      polarity=0,
+                      phase=0,
+                      bits=8,
+                      firstbit=SPI.MSB,
+                      sck=machine.Pin(2),
+                      mosi=machine.Pin(3),
+                      miso=machine.Pin(4))
+    try:
+        sd = sdcard.SDCard(spi, cs)
+        vfs = uos.VfsFat(sd)
+        uos.mount(vfs, "/sd")
+        sd_mount_point = '/sd'
+    except:
+        sd_inserted = False
+
+    try:
+        pattern = re.compile(r'data(\d+)\.txt')
+        file_list = uos.listdir(sd_mount_point)
+        max_number = -1  # Initialize with a value that ensures any file number will be greater
+        for file_name in file_list:
+            match = pattern.match(file_name)
+            if match:
+                number = int(match.group(1))
+                if number > max_number:
+                    max_number = number
+        if max_number >= 0:
+            highest_data_file = f"data{max_number}.txt"
+            print(f"The highest 'data' file is: {highest_data_file}")
+        else:
+            print("No 'data' files found.")
+    except:
+        sd_inserted = False
+        pass
+    if sd_inserted == False:
+        print("SD card not inserted")
+        
+sd_init()  
+##########################   
+
+
+I2C_SDA = 6
+I2C_SDL = 7
+
+DC = 8
+CS = 9
+SCK = 10
+MOSI = 11
+RST = 12
+
+
+buzzer = PWM(Pin(14))
+buzzer.freq(600)
+buzzer.duty_u16(0)
+
+Vbat= ADC(Pin(29))
 
 bmp280_object = BMP280(I2C(1, sda = Pin(6), scl = Pin(7), freq = 400000),addr = 0x76, use_case = BMP280_CASE_WEATHER)
 
@@ -608,7 +675,17 @@ LCD = LCD_1inch28()
 while True:
     if key3()==0:
         break
+    
+    temperature = bmp280_object.temperature
+    pressure_hPa = ( bmp280_object.pressure * 0.01 )
+    altitude = altitude_IBF(pressure_hPa)
+    LCD.text(str("{:.0f}".format(altitude)) + "M " + "{:.1f}".format(temperature)+'C',83,215,LCD.white)
+
+    reading = Vbat.read_u16()*3.3/65535*2
+    LCD.text("{:.2f}v".format(reading),100,225,LCD.white)
+    LCD.show()
     LCD.fill(color565(0,0,0))
+    
     length = gps_module.any()
     if length>0:
         b = gps_module.read(length)
@@ -621,7 +698,7 @@ while True:
     if (latitude == None and latitude == None):
 
         LCD.text("no data",100,10,LCD.white)
-        LCD.show()
+
         continue
     #_________________________________________________
     t = my_gps.timestamp
@@ -640,104 +717,137 @@ while True:
     LCD.text(longitude,28,50,LCD.white)
     LCD.text((gpsTime),20,60,LCD.white)
     LCD.text((speed),15,70,LCD.white)
-    LCD.show()
+
     
-lora_default = {
-    'frequency': 469000000,
-    'frequency_offset':0,
-    'tx_power_level': 14,
-    'signal_bandwidth': 125e3,
-    'spreading_factor': 9,
-    'coding_rate': 10,
-    'preamble_length': 8,
-    'implicitHeader': False,
-    'sync_word': 0x12,
-    'enable_CRC': True,
-    'invert_IQ': False,
-    'debug': False,
-}
 
-lora_pins = {
-    'dio_0':27,
-    'ss':5,
-    'reset':15,
-    'sck':2,
-    'miso':4,
-    'mosi':3,
-}
-
-lora_spi = SPI(0,
-    baudrate=20_000_000, polarity=0, phase=0,
-    bits=8, firstbit=SPI.MSB,
-    sck=Pin(lora_pins['sck'], Pin.OUT, Pin.PULL_DOWN),
-    mosi=Pin(lora_pins['mosi'], Pin.OUT, Pin.PULL_UP),
-    miso=Pin(lora_pins['miso'], Pin.IN, Pin.PULL_UP),
-)
-lora = SX127x(lora_spi, pins=lora_pins, parameters=lora_default)
 
 
 qmi8658=QMI8658()
-Vbat= ADC(Pin(Vbat_Pin))   
+  
 temperature = bmp280_object.temperature
 pressure_hPa = ( bmp280_object.pressure * 0.01 )
 altitude = altitude_IBF(pressure_hPa)
+
+rssi_lora = 0
+pitch_airplane = 58
+roll_airplane = 0
+
+altitude_air = None
+temperature_air = None
+battery_volt_air = None
+current_air = None
+power_air = None
+energy_air = None
+rssi = None
+
+buzzer_flag = False
+buzzer_mode = 1              #1 - single beep, 2 - continuous on off beeping, 3 - continuous beeping (10 seconds timeout)
+buzzer_time = time.ticks_ms()
+signal_lost_warning = False
+
+def buzzer_function():
+    global buzzer_mode, buzzer_time, buzzer_flag, signal_lost_warning
+    if buzzer_flag == False:
+        return
     
-    
-lcd_start_time1 = time.ticks_ms()
-x = 0
+    if buzzer_mode == 1:
+        if buzzer.duty_u16()== 0:
+            buzzer.duty_u16(5000)
+        else:
+            buzzer.duty_u16(0)
+            buzzer_flag = False
+            signal_lost_warning = True
+        
 def main_loop(source):
-    global lcd_start_time1, x
-    x = x + 1
-    lcd_start_time = time.ticks_ms()
+    global lcd_start_time1, pitch_airplane, roll_airplane, altitude_air, temperature_air, battery_volt_air, current_air, energy_air, rssi, lora_last_message_time, buzzer_flag, signal_lost_warning
+    
+    buzzer_function()
 
     temperature = bmp280_object.temperature
     pressure_hPa = ( bmp280_object.pressure * 0.01 )
     altitude = altitude_IBF(pressure_hPa)
-    
-    xyz = qmi8658.Read_XYZ()
-    sample = int(40 - (40*(xyz[2])))
-    if xyz[0] < 0 :
-        rotation_q = (85*(xyz[1]))-10
-    if xyz[0] > 0 :
-        rotation_q = 190 - (85*(xyz[1]))
-    else:
-        rotation_q = 85*(xyz[1])
-        
     LCD.fill(color565(0,0,0))
     
     LCD.fill_rect(0,0,240,119,color565(80,235,129))
     LCD.fill_rect(0,119,240,2,LCD.white) 
     LCD.fill_rect(0,121,240,120,0x29)
-
-
-    LCD.line(*math_conversion(45,105,105,105,rotation_q,sample), color2)
-    LCD.line(*math_conversion(105,105,105,120,rotation_q,sample), color2)
-    LCD.line(*math_conversion(105,120,135,120,rotation_q,sample), color2)
-    LCD.line(*math_conversion(135,105,135,120,rotation_q,sample), color2)
-    LCD.line(*math_conversion(135,105,195,105,rotation_q,sample), color2)
-
-    LCD.line(*math_conversion(45,104,106,104,rotation_q,sample), color2)
-    LCD.line(*math_conversion(106,104,106,119,rotation_q,sample), color2)
-    LCD.line(*math_conversion(106,119,134,119,rotation_q,sample), color2)
-    LCD.line(*math_conversion(134,119,134,104,rotation_q,sample), color2)
-    LCD.line(*math_conversion(134,104,195,104,rotation_q,sample), color2)
     
-    LCD.line(*math_conversion(45,106,104,106,rotation_q,sample), color2)
-    LCD.line(*math_conversion(136,106,195,106,rotation_q,sample), color2)
-    LCD.line(*math_conversion(45,103,104,103,rotation_q,sample), color2)
-    LCD.line(*math_conversion(136,103,195,103,rotation_q,sample), color2)
+
+    try:
+        LCD.text(str("{:.0f}".format(altitude_air -  altitude) + "M " + "{:.1f}".format(temperature_air) + "C"),82,10,LCD.white)
+        LCD.text(str("{:.2f}".format(battery_volt_air) + "V " + "{:.1f}".format(current_air) + "A " + "{:.1f}".format(energy_air) + "Wh"),50,25,LCD.white)
+        if rssi > -100:
+            LCD.text(str(rssi), 5, 105, LCD.green)
+        else:
+            LCD.text(str(rssi), 5, 105, LCD.red)
+        
+        if time.ticks_diff(time.ticks_ms(), lora_last_message_time) > 2000:
+            LCD.text(('last signal - ' + "{:.0f}".format(time.ticks_diff(time.ticks_ms(), lora_last_message_time)/1000) + 's'),10,140,LCD.white)
+            if signal_lost_warning == False:
+                buzzer_flag = True
+            
+    except Exception as e:
+        print(e)
+
+
+    LCD.line(*math_conversion(45,105,105,105,roll_airplane,pitch_airplane), color2)
+    LCD.line(*math_conversion(105,105,105,120,roll_airplane,pitch_airplane), color2)
+    LCD.line(*math_conversion(105,120,135,120,roll_airplane,pitch_airplane), color2)
+    LCD.line(*math_conversion(135,105,135,120,roll_airplane,pitch_airplane), color2)
+    LCD.line(*math_conversion(135,105,195,105,roll_airplane,pitch_airplane), color2)
+
+    LCD.line(*math_conversion(45,104,106,104,roll_airplane,pitch_airplane), color2)
+    LCD.line(*math_conversion(106,104,106,119,roll_airplane,pitch_airplane), color2)
+    LCD.line(*math_conversion(106,119,134,119,roll_airplane,pitch_airplane), color2)
+    LCD.line(*math_conversion(134,119,134,104,roll_airplane,pitch_airplane), color2)
+    LCD.line(*math_conversion(134,104,195,104,roll_airplane,pitch_airplane), color2)
     
-    LCD.text(str("{:.0f}".format(altitude)) + "M",102,10,LCD.white)
-    LCD.text(str("{:.1f}".format(temperature)) + "C",102,20,LCD.white)
+    LCD.line(*math_conversion(45,106,104,106,roll_airplane,pitch_airplane), color2)
+    LCD.line(*math_conversion(136,106,195,106,roll_airplane,pitch_airplane), color2)
+    LCD.line(*math_conversion(45,103,104,103,roll_airplane,pitch_airplane), color2)
+    LCD.line(*math_conversion(136,103,195,103,roll_airplane,pitch_airplane), color2)
+    
+    LCD.text(str("{:.0f}".format(altitude)) + "M",102,207,LCD.white)
+    LCD.text(str("{:.1f}".format(temperature)) + "C",102,216,LCD.white)
 
     reading = Vbat.read_u16()*3.3/65535*2
-    LCD.text("Vbat={:.2f}".format(reading),80,225,LCD.white)
+    LCD.text("{:.2f}v".format(reading),100,225,LCD.white)
     
     LCD.show()
-    if time.ticks_diff(time.ticks_ms(), lcd_start_time1)>1000:
-        lcd_start_time1 = time.ticks_ms()
-        print(x)
-        x = 0
-    
+
 main_timer = Timer(period=100, mode=Timer.PERIODIC, callback=main_loop)
-LoRaReceiver.receive(lora)
+
+
+
+
+
+while True:
+    if lora.receivedPacket():
+        try:
+            payload = lora.readPayload().decode()
+            print(payload)
+            payload_parts = payload.split(',')
+            
+            if payload[0] == 'A':
+                pitch_airplane = int(58 - (58*float(payload_parts[2].strip()))) 
+                roll_airplane = 80*float(payload_parts[1].strip())
+                
+
+            if payload[0] == 'B':
+                altitude_air = float(payload_parts[1].strip())
+                temperature_air = float(payload_parts[2].strip())
+                battery_volt_air = float(payload_parts[3].strip())
+                current_air = float(payload_parts[4].strip())
+                energy_air = float(payload_parts[5].strip())
+                power_air = battery_volt_air*current_air
+                
+                
+            if payload[0] == 'C':
+                gps_coordinates_air = float(payload_parts[1].strip())
+                
+            rssi = lora.packetRssi()
+            lora_last_message_time = time.ticks_ms()
+            signal_lost_warning = False
+        except Exception as e:
+            print(e)
+
