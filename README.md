@@ -8,3 +8,4 @@ key applications:
 - Flashlight: Works as a simple flash light with 20+ hours of battery life.
 - Lo-Ra Radio Communication: Acts as a transmitter and receiver for Lo-Ra radio messages.
 - Data Display: Shows altitude, temperature, speed, and GPS coordinates data using built-in sensors.
+!(pictures/PXL_20231106_143741140~2 (1).jpg)
