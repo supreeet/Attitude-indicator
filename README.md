@@ -9,4 +9,4 @@ key applications:
 - Lo-Ra Radio Communication: Acts as a transmitter and receiver for Lo-Ra radio messages.
 - Data Display: Shows altitude, temperature, speed, and GPS coordinates data using built-in sensors.
 
-![internals](pictures/PXL_20231106_143741140~2(1).jpg)
+![PXL_20231106_143741140~2 (1)](https://github.com/supreeet/Attitude-indicator/assets/117578605/6a1ef1fc-8a88-4d9e-9c72-c298d7e70b7f)
