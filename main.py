@@ -1,45 +1,49 @@
-from machine import Pin, I2C, SPI, PWM, ADC, UART, Timer
-import time
-buzzer = PWM(Pin(14))
-buzzer.freq(600)
-buzzer.duty_u16(0)
+from machine import Pin, I2C, SPI, PWM, Timer, UART, ADC
+import time, framebuf
+import gc9a01py as gc9a01
+from fonts import vga1_8x8 as font1
+from fonts import vga1_8x16 as font2
+from fonts import vga1_16x32 as font3
+from bmp280 import *
 
-lcd_backlight = PWM(Pin(25))
-lcd_backlight.freq(1000)
-lcd_backlight.duty_u16(65000)
+key1 = Pin(21,Pin.IN, Pin.PULL_UP)   # up
+key2 = Pin(20,Pin.IN, Pin.PULL_UP)   # select
+key3 = Pin(19,Pin.IN, Pin.PULL_UP)   # flash
 
 white_pwm = PWM(Pin(22)) 
 white_pwm.freq(1000)
-white_pwm.duty_u16(5)
+white_pwm.duty_u16(3)
+
 green_pwm = PWM(Pin(18))
 green_pwm.freq(1000)
-green_pwm.duty_u16(65000)
+green_pwm.duty_u16(65500)
+
 orange_pwm = PWM(Pin(17))
 orange_pwm.freq(1000)
-orange_pwm.duty_u16(65000)
+orange_pwm.duty_u16(65500)
+
 red_pwm = PWM(Pin(16))
 red_pwm.freq(1000)
-red_pwm.duty_u16(65000)
+red_pwm.duty_u16(65500)
 
-key1 = Pin(21,Pin.IN, Pin.PULL_UP)
-key2 = Pin(20,Pin.IN, Pin.PULL_UP)
-key3 = Pin(19,Pin.IN, Pin.PULL_UP)
+lcd_backlight = PWM(Pin(25))
+lcd_backlight.freq(1000)
+lcd_backlight.duty_u16(20000)
 
 key_debounce_timer = time.ticks_ms()
-def key1_callback(pin):
+
+def key3_callback(pin):
     global key_debounce_timer
     if time.ticks_diff(time.ticks_ms(), key_debounce_timer) < 200:
         return
     time.sleep_ms(5)
-    print("key 1")
-    
+    print("key 3")
+
     button_time = time.ticks_ms()
     while True:
         x = time.ticks_diff(time.ticks_ms(), button_time)
-        if x > 10000:
-            key_debounce_timer = time.ticks_ms()
-            return
-        if key1()==1:
+        
+        if key3()==1:
             break
         
         if x > 200:
@@ -59,7 +63,7 @@ def key1_callback(pin):
                 key_debounce_timer = time.ticks_ms()
                 return
         else:
-            white_pwm.duty_u16(5)
+            white_pwm.duty_u16(3)
         
     if x < 2:
         key_debounce_timer = time.ticks_ms()
@@ -67,198 +71,10 @@ def key1_callback(pin):
 
     key_debounce_timer = time.ticks_ms()
     
-    
-key1.irq(trigger=Pin.IRQ_FALLING, handler=key1_callback)
+key3.irq(trigger=Pin.IRQ_FALLING, handler=key3_callback)
 
-def key2_callback(pin):
-    global key_debounce_timer
-    if time.ticks_diff(time.ticks_ms(), key_debounce_timer) < 200:
-        return
-    time.sleep_ms(5)
-    print("key 2")
-    
-    button_time = time.ticks_ms()
-    while True:
-        x = time.ticks_diff(time.ticks_ms(), button_time)
-        if x > 4000:
-            key_debounce_timer = time.ticks_ms()
-            return
-        if key2()==1:
-            break
-    if x < 2:
-        key_debounce_timer = time.ticks_ms()
-        return
-    
-    key_debounce_timer = time.ticks_ms()
-
-key2.irq(trigger=Pin.IRQ_FALLING, handler=key2_callback)
-
-def key3_callback(pin):
-    global key_debounce_timer
-    if time.ticks_diff(time.ticks_ms(), key_debounce_timer) < 200:
-        return
-    time.sleep_ms(5)
-    print("key 3")
-    
-    button_time = time.ticks_ms()
-    while True:
-        x = time.ticks_diff(time.ticks_ms(), button_time)
-        if x > 4000:
-            key_debounce_timer = time.ticks_ms()
-            return
-        if key3()==1:
-            break
-    if x < 2:
-        key_debounce_timer = time.ticks_ms()
-        return
-    key_debounce_timer = time.ticks_ms()
-    
-#key3.irq(trigger=Pin.IRQ_FALLING, handler=key3_callback)
-
-import framebuf, math
-from bmp280 import *
-from micropyGPS import MicropyGPS
-from sx127x import SX127x
-from examples import LoRaSender
-from examples import LoRaReceiver
-import sdcard, uos, re
-
-lora_default = {
-    'frequency': 469000000,
-    'frequency_offset':0,
-    'tx_power_level': 14,
-    'signal_bandwidth': 125e3,
-    'spreading_factor': 9,
-    'coding_rate': 10,
-    'preamble_length': 8,
-    'implicitHeader': False,
-    'sync_word': 0x12,
-    'enable_CRC': True,
-    'invert_IQ': False,
-    'debug': False,
-}
-
-lora_pins = {
-    'dio_0':27,
-    'ss':5,
-    'reset':15,
-    'sck':2,
-    'miso':4,
-    'mosi':3,
-}
-
-lora_spi = SPI(0,
-    baudrate=20_000_000, polarity=0, phase=0,
-    bits=8, firstbit=SPI.MSB,
-    sck=Pin(lora_pins['sck'], Pin.OUT, Pin.PULL_DOWN),
-    mosi=Pin(lora_pins['mosi'], Pin.OUT, Pin.PULL_UP),
-    miso=Pin(lora_pins['miso'], Pin.IN, Pin.PULL_UP),
-)
-lora = SX127x(lora_spi, pins=lora_pins, parameters=lora_default)
-
-
-def rotate_coordinates(x, y, angle_degrees):
-    # Convert angle from degrees to radians
-    angle_radians = math.radians(angle_degrees)
-
-    # Clockwise rotation formulas
-    new_x = x * math.cos(angle_radians) + y * math.sin(angle_radians)
-    new_y = -x * math.sin(angle_radians) + y * math.cos(angle_radians)
-
-    return new_x, new_y
-
-
-def math_conversion(a1,b1,a2,b2,rotation_angle,elevation):
-    a1 = a1 - 120
-    b1 = b1 - 120
-    a2 = a2 - 120
-    b2 = b2 - 120
-    x1, y1 = rotate_coordinates(a1,b1,rotation_angle)
-    x2, y2 = rotate_coordinates(a2,b2,rotation_angle)
-    return int(x1+120),int(y1+70+elevation),int(x2+120),int(y2+70+elevation)
-
-gps_module = UART(0, baudrate=9600, rx=Pin(1))
-TIMEZONE = 5
-my_gps = MicropyGPS(TIMEZONE)
-def convert(parts):
-    if (parts[0] == 0):
-        return None
-        
-    data = parts[0]+(parts[1]/60.0)
-    # parts[2] contain 'E' or 'W' or 'N' or 'S'
-    if (parts[2] == 'S'):
-        data = -data
-    if (parts[2] == 'W'):
-        data = -data
-
-    data = '{0:.6f}'.format(data) # to 6 decimal places
-    return str(data)
-
-######################       SD
-sd_inserted = True
-def sd_init():
-    global sd_inserted
-    cs = Pin(13, machine.Pin.OUT)
-    spi = SPI(0,
-                      baudrate=1000000,
-                      polarity=0,
-                      phase=0,
-                      bits=8,
-                      firstbit=SPI.MSB,
-                      sck=machine.Pin(2),
-                      mosi=machine.Pin(3),
-                      miso=machine.Pin(4))
-    try:
-        sd = sdcard.SDCard(spi, cs)
-        vfs = uos.VfsFat(sd)
-        uos.mount(vfs, "/sd")
-        sd_mount_point = '/sd'
-    except:
-        sd_inserted = False
-
-    try:
-        pattern = re.compile(r'data(\d+)\.txt')
-        file_list = uos.listdir(sd_mount_point)
-        max_number = -1  # Initialize with a value that ensures any file number will be greater
-        for file_name in file_list:
-            match = pattern.match(file_name)
-            if match:
-                number = int(match.group(1))
-                if number > max_number:
-                    max_number = number
-        if max_number >= 0:
-            highest_data_file = f"data{max_number}.txt"
-            print(f"The highest 'data' file is: {highest_data_file}")
-        else:
-            print("No 'data' files found.")
-    except:
-        sd_inserted = False
-        pass
-    if sd_inserted == False:
-        print("SD card not inserted")
-        
-sd_init()  
-##########################   
-
-
-I2C_SDA = 6
-I2C_SDL = 7
-
-DC = 8
-CS = 9
-SCK = 10
-MOSI = 11
-RST = 12
-
-
-buzzer = PWM(Pin(14))
-buzzer.freq(600)
-buzzer.duty_u16(0)
-
-Vbat= ADC(Pin(29))
 
 bmp280_object = BMP280(I2C(1, sda = Pin(6), scl = Pin(7), freq = 400000),addr = 0x76, use_case = BMP280_CASE_WEATHER)
-
 bmp280_object.power_mode = BMP280_POWER_NORMAL
 bmp280_object.oversample = BMP280_OS_HIGH
 bmp280_object.temp_os = BMP280_TEMP_OS_8
@@ -273,581 +89,293 @@ def altitude_IBF(pressure):
     altitude = 44330*(1-(pressure_ratio**(1/5.255)))
     return altitude
 
-class LCD_1inch28(framebuf.FrameBuffer):
-    def __init__(self):
-        self.width = 240
-        self.height = 240
-        
-        self.cs = Pin(CS,Pin.OUT)
-        self.rst = Pin(RST,Pin.OUT)
-        
-        self.cs(1)
-        self.spi = SPI(1,100_000_000,polarity=0, phase=0,sck=Pin(SCK),mosi=Pin(MOSI),miso=None)
-        self.dc = Pin(DC,Pin.OUT)
-        self.dc(1)
-        self.buffer = bytearray(self.height * self.width * 2)
-        super().__init__(self.buffer, self.width, self.height, framebuf.RGB565)
-        self.init_display()
-        
-        self.red   =   0x07E0
-        self.green =   0x001f
-        self.blue  =   0xf800
-        self.white =   0xffff
-        
-        self.fill(self.white)
-        self.show()
-
-        
-    def write_cmd(self, cmd):
-        self.cs(1)
-        self.dc(0)
-        self.cs(0)
-        self.spi.write(bytearray([cmd]))
-        self.cs(1)
-
-    def write_data(self, buf):
-        self.cs(1)
-        self.dc(1)
-        self.cs(0)
-        self.spi.write(bytearray([buf]))
-        self.cs(1)
-        
-    def init_display(self):
-        """Initialize dispaly"""  
-        self.rst(1)
-        time.sleep(0.01)
-        self.rst(0)
-        time.sleep(0.01)
-        self.rst(1)
-        time.sleep(0.05)
-        
-        self.write_cmd(0xEF)
-        self.write_cmd(0xEB)
-        self.write_data(0x14) 
-        
-        self.write_cmd(0xFE) 
-        self.write_cmd(0xEF) 
-
-        self.write_cmd(0xEB)
-        self.write_data(0x14) 
-
-        self.write_cmd(0x84)
-        self.write_data(0x40) 
-
-        self.write_cmd(0x85)
-        self.write_data(0xFF) 
-
-        self.write_cmd(0x86)
-        self.write_data(0xFF) 
-
-        self.write_cmd(0x87)
-        self.write_data(0xFF)
-
-        self.write_cmd(0x88)
-        self.write_data(0x0A)
-
-        self.write_cmd(0x89)
-        self.write_data(0x21) 
-
-        self.write_cmd(0x8A)
-        self.write_data(0x00) 
-
-        self.write_cmd(0x8B)
-        self.write_data(0x80) 
-
-        self.write_cmd(0x8C)
-        self.write_data(0x01) 
-
-        self.write_cmd(0x8D)
-        self.write_data(0x01) 
-
-        self.write_cmd(0x8E)
-        self.write_data(0xFF) 
-
-        self.write_cmd(0x8F)
-        self.write_data(0xFF) 
 
 
-        self.write_cmd(0xB6)
-        self.write_data(0x00)
-        self.write_data(0x20)
+vbat_pin = ADC(Pin(29))
 
-        self.write_cmd(0x36)
-        self.write_data(0x98)
-
-        self.write_cmd(0x3A)
-        self.write_data(0x05) 
-
-
-        self.write_cmd(0x90)
-        self.write_data(0x08)
-        self.write_data(0x08)
-        self.write_data(0x08)
-        self.write_data(0x08) 
-
-        self.write_cmd(0xBD)
-        self.write_data(0x06)
-        
-        self.write_cmd(0xBC)
-        self.write_data(0x00)
-
-        self.write_cmd(0xFF)
-        self.write_data(0x60)
-        self.write_data(0x01)
-        self.write_data(0x04)
-
-        self.write_cmd(0xC3)
-        self.write_data(0x13)
-        self.write_cmd(0xC4)
-        self.write_data(0x13)
-
-        self.write_cmd(0xC9)
-        self.write_data(0x22)
-
-        self.write_cmd(0xBE)
-        self.write_data(0x11) 
-
-        self.write_cmd(0xE1)
-        self.write_data(0x10)
-        self.write_data(0x0E)
-
-        self.write_cmd(0xDF)
-        self.write_data(0x21)
-        self.write_data(0x0c)
-        self.write_data(0x02)
-
-        self.write_cmd(0xF0)   
-        self.write_data(0x45)
-        self.write_data(0x09)
-        self.write_data(0x08)
-        self.write_data(0x08)
-        self.write_data(0x26)
-        self.write_data(0x2A)
-
-        self.write_cmd(0xF1)    
-        self.write_data(0x43)
-        self.write_data(0x70)
-        self.write_data(0x72)
-        self.write_data(0x36)
-        self.write_data(0x37)  
-        self.write_data(0x6F)
+spi = SPI(1, baudrate=40000000, sck=Pin(10), mosi=Pin(11))
+LCD = gc9a01.GC9A01(
+    spi,
+    dc=Pin(8, Pin.OUT),
+    cs=Pin(9, Pin.OUT),
+    reset=Pin(12, Pin.OUT),
+    backlight=Pin(25, Pin.OUT),
+    rotation=1)
 
 
-        self.write_cmd(0xF2)   
-        self.write_data(0x45)
-        self.write_data(0x09)
-        self.write_data(0x08)
-        self.write_data(0x08)
-        self.write_data(0x26)
-        self.write_data(0x2A)
+modes = [" GPS ", " INA219 ", " Lora ", " TEA5767 ", " I2C scan ",
+         " mode 6 "," mode 7 ", " mode 8 "]
 
-        self.write_cmd(0xF3)   
-        self.write_data(0x43)
-        self.write_data(0x70)
-        self.write_data(0x72)
-        self.write_data(0x36)
-        self.write_data(0x37) 
-        self.write_data(0x6F)
+num_modes = len(modes)
+selected_mode = 0
 
-        self.write_cmd(0xED)
-        self.write_data(0x1B) 
-        self.write_data(0x0B) 
+LCD.fill(gc9a01.BLACK)
+start = time.ticks_ms()
 
-        self.write_cmd(0xAE)
-        self.write_data(0x77)
-        
-        self.write_cmd(0xCD)
-        self.write_data(0x63)
+key_debounce_timer = time.ticks_ms()
+def key1_callback(pin):
+    global selected_mode, key_debounce_timer
+    if time.ticks_diff(time.ticks_ms(), key_debounce_timer) < 300:
+        return
+    time.sleep_ms(5)
+    
+    if selected_mode<7:
+        selected_mode = selected_mode + 1
+    else:
+        selected_mode = 0
+    print(modes[selected_mode])
+    key_debounce_timer = time.ticks_ms()
 
 
-        self.write_cmd(0x70)
-        self.write_data(0x07)
-        self.write_data(0x07)
-        self.write_data(0x04)
-        self.write_data(0x0E) 
-        self.write_data(0x0F) 
-        self.write_data(0x09)
-        self.write_data(0x07)
-        self.write_data(0x08)
-        self.write_data(0x03)
+key1.irq(trigger=Pin.IRQ_FALLING, handler=key1_callback)
+mode_selection_complete = False
+def key2_callback(pin):
+    global key_debounce_timer, mode_selection_complete
+    if time.ticks_diff(time.ticks_ms(), key_debounce_timer) < 300:
+        return
+    time.sleep_ms(5)
+    print("mode confirmed")
+    mode_selection_complete = True
+    key_debounce_timer = time.ticks_ms()
+    key1.irq(trigger=Pin.IRQ_FALLING, handler=None)
 
-        self.write_cmd(0xE8)
-        self.write_data(0x34)
-
-        self.write_cmd(0x62)
-        self.write_data(0x18)
-        self.write_data(0x0D)
-        self.write_data(0x71)
-        self.write_data(0xED)
-        self.write_data(0x70) 
-        self.write_data(0x70)
-        self.write_data(0x18)
-        self.write_data(0x0F)
-        self.write_data(0x71)
-        self.write_data(0xEF)
-        self.write_data(0x70) 
-        self.write_data(0x70)
-
-        self.write_cmd(0x63)
-        self.write_data(0x18)
-        self.write_data(0x11)
-        self.write_data(0x71)
-        self.write_data(0xF1)
-        self.write_data(0x70) 
-        self.write_data(0x70)
-        self.write_data(0x18)
-        self.write_data(0x13)
-        self.write_data(0x71)
-        self.write_data(0xF3)
-        self.write_data(0x70) 
-        self.write_data(0x70)
-
-        self.write_cmd(0x64)
-        self.write_data(0x28)
-        self.write_data(0x29)
-        self.write_data(0xF1)
-        self.write_data(0x01)
-        self.write_data(0xF1)
-        self.write_data(0x00)
-        self.write_data(0x07)
-
-        self.write_cmd(0x66)
-        self.write_data(0x3C)
-        self.write_data(0x00)
-        self.write_data(0xCD)
-        self.write_data(0x67)
-        self.write_data(0x45)
-        self.write_data(0x45)
-        self.write_data(0x10)
-        self.write_data(0x00)
-        self.write_data(0x00)
-        self.write_data(0x00)
-
-        self.write_cmd(0x67)
-        self.write_data(0x00)
-        self.write_data(0x3C)
-        self.write_data(0x00)
-        self.write_data(0x00)
-        self.write_data(0x00)
-        self.write_data(0x01)
-        self.write_data(0x54)
-        self.write_data(0x10)
-        self.write_data(0x32)
-        self.write_data(0x98)
-
-        self.write_cmd(0x74)
-        self.write_data(0x10)
-        self.write_data(0x85)
-        self.write_data(0x80)
-        self.write_data(0x00) 
-        self.write_data(0x00) 
-        self.write_data(0x4E)
-        self.write_data(0x00)
-        
-        self.write_cmd(0x98)
-        self.write_data(0x3e)
-        self.write_data(0x07)
-
-        self.write_cmd(0x35)
-        self.write_cmd(0x21)
-
-        self.write_cmd(0x11)
-        time.sleep(0.12)
-        self.write_cmd(0x29)
-        time.sleep(0.02)
-        
-        self.write_cmd(0x21)
-
-        self.write_cmd(0x11)
-
-        self.write_cmd(0x29)
-
-    def show(self):
-        self.write_cmd(0x2A)
-        self.write_data(0x00)
-        self.write_data(0x00)
-        self.write_data(0x00)
-        self.write_data(0xef)
-        
-        self.write_cmd(0x2B)
-        self.write_data(0x00)
-        self.write_data(0x00)
-        self.write_data(0x00)
-        self.write_data(0xEF)
-        
-        self.write_cmd(0x2C)
-        
-        self.cs(1)
-        self.dc(1)
-        self.cs(0)
-        self.spi.write(self.buffer)
-        self.cs(1)
-
-
-class QMI8658(object):
-    def __init__(self,address=0X6B):
-        self._address = address
-        self._bus = I2C(id=1,scl=Pin(I2C_SDL),sda=Pin(I2C_SDA))
-        bRet=self.WhoAmI()
-        if bRet :
-            self.Read_Revision()
-        else    :
-            return NULL
-        self.Config_apply()
-
-    def _read_byte(self,cmd):
-        rec=self._bus.readfrom_mem(int(self._address),int(cmd),1)
-        return rec[0]
-    def _read_block(self, reg, length=1):
-        rec=self._bus.readfrom_mem(int(self._address),int(reg),length)
-        return rec
-    def _read_u16(self,cmd):
-        LSB = self._bus.readfrom_mem(int(self._address),int(cmd),1)
-        MSB = self._bus.readfrom_mem(int(self._address),int(cmd)+1,1)
-        return (MSB[0] << 8) + LSB[0]
-    def _write_byte(self,cmd,val):
-        self._bus.writeto_mem(int(self._address),int(cmd),bytes([int(val)]))
-        
-    def WhoAmI(self):
-        bRet=False
-        if (0x05) == self._read_byte(0x00):
-            bRet = True
-        return bRet
-    def Read_Revision(self):
-        return self._read_byte(0x01)
-    def Config_apply(self):
-        # REG CTRL1
-        self._write_byte(0x02,0x60)
-        # REG CTRL2 : QMI8658AccRange_8g  and QMI8658AccOdr_1000Hz
-        self._write_byte(0x03,0x23)
-        # REG CTRL3 : QMI8658GyrRange_512dps and QMI8658GyrOdr_1000Hz
-        self._write_byte(0x04,0x53)
-        # REG CTRL4 : No
-        self._write_byte(0x05,0x00)
-        # REG CTRL5 : Enable Gyroscope And Accelerometer Low-Pass Filter 
-        self._write_byte(0x06,0x11)
-        # REG CTRL6 : Disables Motion on Demand.
-        self._write_byte(0x07,0x00)
-        # REG CTRL7 : Enable Gyroscope And Accelerometer
-        self._write_byte(0x08,0x03)
-
-    def Read_Raw_XYZ(self):
-        xyz=[0,0,0,0,0,0]
-        raw_timestamp = self._read_block(0x30,3)
-        raw_acc_xyz=self._read_block(0x35,6)
-        raw_gyro_xyz=self._read_block(0x3b,6)
-        raw_xyz=self._read_block(0x35,12)
-        timestamp = (raw_timestamp[2]<<16)|(raw_timestamp[1]<<8)|(raw_timestamp[0])
-        for i in range(6):
-            # xyz[i]=(raw_acc_xyz[(i*2)+1]<<8)|(raw_acc_xyz[i*2])
-            # xyz[i+3]=(raw_gyro_xyz[((i+3)*2)+1]<<8)|(raw_gyro_xyz[(i+3)*2])
-            xyz[i] = (raw_xyz[(i*2)+1]<<8)|(raw_xyz[i*2])
-            if xyz[i] >= 32767:
-                xyz[i] = xyz[i]-65535
-        return xyz
-    def Read_XYZ(self):
-        xyz=[0,0,0,0,0,0]
-        raw_xyz=self.Read_Raw_XYZ()  
-        #QMI8658AccRange_8g
-        acc_lsb_div=(1<<12)
-        #QMI8658GyrRange_512dps
-        gyro_lsb_div = 64
-        for i in range(3):
-            xyz[i]=raw_xyz[i]/acc_lsb_div#(acc_lsb_div/1000.0)
-            xyz[i+3]=raw_xyz[i+3]*1.0/gyro_lsb_div
-        return xyz
-
-
-def color565(red, green=0, blue=0):
-    """
-    Convert red, green and blue values (0-255) into a 16-bit 565 encoded color.
-    """
-    try:
-        red, green, blue = red  # see if the first var is a tuple/list
-    except TypeError:
-        pass
-    return (red & 0xf8) << 8 | (green & 0xfc) << 3 | blue >> 3
-color1 = color565(20,20,20)
-color2 = color565(0,28,100)
-LCD = LCD_1inch28()
-
+key2.irq(trigger=Pin.IRQ_FALLING, handler=key2_callback)
 
 while True:
-    if key3()==0:
+    vbat = vbat_pin.read_u16()*3.3/65535*2
+    LCD.text(font1, "{:.2f}v".format(vbat),100,225,gc9a01.WHITE)
+    LCD.text(font1, "{:.1f}".format(bmp280_object.temperature) + 'C ' + "{:.0f}".format(altitude_IBF(bmp280_object.pressure * 0.01)) + 'M', 80, 215,gc9a01.WHITE)
+
+    for i in range(len(modes)):
+        if i != selected_mode:
+            background_text_color = gc9a01.WHITE
+            foreground_text_color = gc9a01.BLACK
+        else:
+            background_text_color = gc9a01.BLACK
+            foreground_text_color = gc9a01.WHITE
+        
+        LCD.text(font2, modes[i], 50, 30 + i*20,
+             background_text_color,foreground_text_color)
+    if mode_selection_complete == True:
+        key2.irq(trigger=Pin.IRQ_FALLING, handler=None)
+        print(modes[selected_mode], 'confirmed')
         break
     
-    temperature = bmp280_object.temperature
-    pressure_hPa = ( bmp280_object.pressure * 0.01 )
-    altitude = altitude_IBF(pressure_hPa)
-    LCD.text(str("{:.0f}".format(altitude)) + "M " + "{:.1f}".format(temperature)+'C',83,215,LCD.white)
+LCD.fill(gc9a01.BLACK)
+LCD.text(font2, modes[selected_mode], 90, 5,gc9a01.WHITE)
 
-    reading = Vbat.read_u16()*3.3/65535*2
-    LCD.text("{:.2f}v".format(reading),100,225,LCD.white)
-    LCD.show()
-    LCD.fill(color565(0,0,0))
-    
-    length = gps_module.any()
-    if length>0:
-        b = gps_module.read(length)
-        for x in b:
-            msg = my_gps.update(chr(x))
-    #_________________________________________________
-    latitude = convert(my_gps.latitude)
-    longitude = convert(my_gps.longitude)
-    #_________________________________________________
-    if (latitude == None and latitude == None):
-
-        LCD.text("no data",100,10,LCD.white)
-
-        continue
-    #_________________________________________________
-    t = my_gps.timestamp
-    #t[0] => hours : t[1] => minutes : t[2] => seconds
-    gpsTime = '{:02d}:{:02d}:{:02}'.format(t[0], t[1], t[2])
-    
-    gpsdate = my_gps.date_string('long')
-    speed = my_gps.speed_string('kph') #'kph' or 'mph' or 'knot'
-    #_________________________________________________
-    print('Lat:', latitude)
-    print('Lng:', longitude)
-    print('time:', gpsTime)
-    print('Date:', gpsdate)
-    print('speed:', speed)
-    LCD.text(latitude,35,40,LCD.white)
-    LCD.text(longitude,28,50,LCD.white)
-    LCD.text((gpsTime),20,60,LCD.white)
-    LCD.text((speed),15,70,LCD.white)
-
-    
-
-
-
-qmi8658=QMI8658()
-  
-temperature = bmp280_object.temperature
-pressure_hPa = ( bmp280_object.pressure * 0.01 )
-altitude = altitude_IBF(pressure_hPa)
-
-rssi_lora = 0
-pitch_airplane = 58
-roll_airplane = 0
-
-altitude_air = None
-temperature_air = None
-battery_volt_air = None
-current_air = None
-power_air = None
-energy_air = None
-rssi = None
-
-buzzer_flag = False
-buzzer_mode = 1              #1 - single beep, 2 - continuous on off beeping, 3 - continuous beeping (10 seconds timeout)
-buzzer_time = time.ticks_ms()
-signal_lost_warning = False
-
-def buzzer_function():
-    global buzzer_mode, buzzer_time, buzzer_flag, signal_lost_warning
-    if buzzer_flag == False:
+def key2_reset(pin):
+    global key_debounce_timer, mode_selection_complete
+    if time.ticks_diff(time.ticks_ms(), key_debounce_timer) < 300:
         return
-    
-    if buzzer_mode == 1:
-        if buzzer.duty_u16()== 0:
-            buzzer.duty_u16(5000)
-        else:
-            buzzer.duty_u16(0)
-            buzzer_flag = False
-            signal_lost_warning = True
+    time.sleep_ms(5)
+    button_time = time.ticks_ms()
+    while True:
+        x = time.ticks_diff(time.ticks_ms(), button_time)
         
-def main_loop(source):
-    global lcd_start_time1, pitch_airplane, roll_airplane, altitude_air, temperature_air, battery_volt_air, current_air, energy_air, rssi, lora_last_message_time, buzzer_flag, signal_lost_warning
-    
-    buzzer_function()
-
-    temperature = bmp280_object.temperature
-    pressure_hPa = ( bmp280_object.pressure * 0.01 )
-    altitude = altitude_IBF(pressure_hPa)
-    LCD.fill(color565(0,0,0))
-    
-    LCD.fill_rect(0,0,240,119,color565(80,235,129))
-    LCD.fill_rect(0,119,240,2,LCD.white) 
-    LCD.fill_rect(0,121,240,120,0x29)
-    
-
-    try:
-        LCD.text(str("{:.0f}".format(altitude_air -  altitude) + "M " + "{:.1f}".format(temperature_air) + "C"),82,10,LCD.white)
-        LCD.text(str("{:.2f}".format(battery_volt_air) + "V " + "{:.1f}".format(current_air) + "A " + "{:.1f}".format(energy_air) + "Wh"),50,25,LCD.white)
-        if rssi > -100:
-            LCD.text(str(rssi), 5, 105, LCD.green)
-        else:
-            LCD.text(str(rssi), 5, 105, LCD.red)
+        if key2()==1:
+            break
         
-        if time.ticks_diff(time.ticks_ms(), lora_last_message_time) > 2000:
-            LCD.text(('last signal - ' + "{:.0f}".format(time.ticks_diff(time.ticks_ms(), lora_last_message_time)/1000) + 's'),10,140,LCD.white)
-            if signal_lost_warning == False:
-                buzzer_flag = True
+        if x > 2000:
+            machine.reset()
+                
             
+    if x < 2:
+        key_debounce_timer = time.ticks_ms()
+        return
+    mode_selection_complete = True
+    key_debounce_timer = time.ticks_ms()
+
+key2.irq(trigger=Pin.IRQ_FALLING, handler=key2_reset)
+
+
+if selected_mode == 0:
+    from micropyGPS import MicropyGPS
+    gps_module = UART(0, baudrate=9600, tx=Pin(0), rx=Pin(1))
+    my_gps = MicropyGPS(5.5) # timezone
+    def convert(parts):
+        if (parts[0] == 0):
+            return None
+        
+        data = parts[0]+(parts[1]/60.0)
+        # parts[2] contain 'E' or 'W' or 'N' or 'S'
+        if (parts[2] == 'S'):
+            data = -data
+        if (parts[2] == 'W'):
+            data = -data
+
+        data = '{0:.6f}'.format(data) # to 6 decimal places
+        return str(data)
+
+    while True:
+        vbat = vbat_pin.read_u16()*3.3/65535*2
+        LCD.text(font1,"{:.2f}v".format(vbat),100,225,gc9a01.WHITE)
+        LCD.text(font1, "{:.1f}".format(bmp280_object.temperature) + 'C ' + "{:.0f}".format(altitude_IBF(bmp280_object.pressure * 0.01)) + 'M', 80, 215,gc9a01.WHITE)
+
+        time.sleep_ms(100)
+        length = gps_module.any()
+        if length>0:
+            b = gps_module.read(length)
+            for x in b:
+                msg = my_gps.update(chr(x))
+        #_________________________________________________
+        latitude = convert(my_gps.latitude)
+        longitude = convert(my_gps.longitude)
+        #_________________________________________________
+        if (latitude == None and latitude == None):
+            print(' no data')
+            LCD.text(font2, 'no data', 30, 65,gc9a01.WHITE)
+            continue
+        #_________________________________________________
+        t = my_gps.timestamp
+        #t[0] => hours : t[1] => minutes : t[2] => seconds
+        gpsTime = '{:02d}:{:02d}:{:02}'.format(t[0], t[1], t[2])
+        
+        gpsdate = my_gps.date_string('long')
+        speed = my_gps.speed_string('kph') #'kph' or 'mph' or 'knot'
+        #_________________________________________________
+        
+        LCD.text(font2, latitude, 30, 65,gc9a01.WHITE)
+        LCD.text(font2, longitude, 30, 85,gc9a01.WHITE)
+        LCD.text(font2, gpsTime, 30, 105,gc9a01.WHITE)
+        LCD.text(font2, gpsdate, 30, 125,gc9a01.WHITE)
+        LCD.text(font2, speed, 30, 145,gc9a01.WHITE)
+        
+        print('Lat:', latitude)
+        print('Lng:', longitude)
+        print('time:', gpsTime)
+        print('Date:', gpsdate)
+        print('speed:', speed)
+
+
+if selected_mode == 1:
+    from ina219 import INA219
+    from ina219 import DeviceRangeError
+    ina_available = True
+    try:
+        ina = INA219(0.002,I2C(1, sda = Pin(6), scl = Pin(7)),address=0x40)
+        ina.configure(ina.RANGE_32V)
     except Exception as e:
         print(e)
-
-
-    LCD.line(*math_conversion(45,105,105,105,roll_airplane,pitch_airplane), color2)
-    LCD.line(*math_conversion(105,105,105,120,roll_airplane,pitch_airplane), color2)
-    LCD.line(*math_conversion(105,120,135,120,roll_airplane,pitch_airplane), color2)
-    LCD.line(*math_conversion(135,105,135,120,roll_airplane,pitch_airplane), color2)
-    LCD.line(*math_conversion(135,105,195,105,roll_airplane,pitch_airplane), color2)
-
-    LCD.line(*math_conversion(45,104,106,104,roll_airplane,pitch_airplane), color2)
-    LCD.line(*math_conversion(106,104,106,119,roll_airplane,pitch_airplane), color2)
-    LCD.line(*math_conversion(106,119,134,119,roll_airplane,pitch_airplane), color2)
-    LCD.line(*math_conversion(134,119,134,104,roll_airplane,pitch_airplane), color2)
-    LCD.line(*math_conversion(134,104,195,104,roll_airplane,pitch_airplane), color2)
-    
-    LCD.line(*math_conversion(45,106,104,106,roll_airplane,pitch_airplane), color2)
-    LCD.line(*math_conversion(136,106,195,106,roll_airplane,pitch_airplane), color2)
-    LCD.line(*math_conversion(45,103,104,103,roll_airplane,pitch_airplane), color2)
-    LCD.line(*math_conversion(136,103,195,103,roll_airplane,pitch_airplane), color2)
-    
-    LCD.text(str("{:.0f}".format(altitude)) + "M",102,207,LCD.white)
-    LCD.text(str("{:.1f}".format(temperature)) + "C",102,216,LCD.white)
-
-    reading = Vbat.read_u16()*3.3/65535*2
-    LCD.text("{:.2f}v".format(reading),100,225,LCD.white)
-    
-    LCD.show()
-
-main_timer = Timer(period=100, mode=Timer.PERIODIC, callback=main_loop)
-
-
-
-
-
-while True:
-    if lora.receivedPacket():
+        LCD.text(font2, 'ina219 error', 30, 65,gc9a01.WHITE)
+        ina_available = False
+        
+    wh=0
+    v=5
+    i=0
+    p=0
+    def watthour(source):
+        global wh,v, i ,p
         try:
-            payload = lora.readPayload().decode()
-            print(payload)
-            payload_parts = payload.split(',')
+            v = ina.voltage()
+            i = ina.current()/1000
+            p = ina.power()/1000
+            wh=wh+p/36000
+        except DeviceRangeError as e:
+            print(e)
             
-            if payload[0] == 'A':
-                pitch_airplane = int(58 - (58*float(payload_parts[2].strip()))) 
-                roll_airplane = 80*float(payload_parts[1].strip())
-                
+    if ina_available == True:
+        soc_timer = Timer(period=100, mode=Timer.PERIODIC, callback=watthour)
+        last_soc_save = time.ticks_ms()
 
-            if payload[0] == 'B':
-                altitude_air = float(payload_parts[1].strip())
-                temperature_air = float(payload_parts[2].strip())
-                battery_volt_air = float(payload_parts[3].strip())
-                current_air = float(payload_parts[4].strip())
-                energy_air = float(payload_parts[5].strip())
-                power_air = battery_volt_air*current_air
-                
-                
-            if payload[0] == 'C':
-                gps_coordinates_air = float(payload_parts[1].strip())
-                
-            rssi = lora.packetRssi()
-            lora_last_message_time = time.ticks_ms()
-            signal_lost_warning = False
+        while True:
+            vbat = vbat_pin.read_u16()*3.3/65535*2
+            LCD.text(font1,"{:.2f}v".format(vbat),100,225,gc9a01.WHITE)
+            LCD.text(font1, "{:.1f}".format(bmp280_object.temperature) + 'C ' + "{:.0f}".format(altitude_IBF(bmp280_object.pressure * 0.01)) + 'M', 80, 215,gc9a01.WHITE)
+
+            print("v: %.2f" % v ,", i: %.2f" % i )
+            print("P: %.2f" % p , "wh: %.2f" % wh)
+            
+            LCD.text(font2,"v: %.2f" % v + ", i: %.2f " % i,42,40,gc9a01.WHITE)
+            LCD.text(font2,"P: %.2f" % p + ", wh: %.2f " % wh,42,55,gc9a01.WHITE)
+
+            if time.ticks_diff(time.ticks_ms(), last_soc_save)>30000:
+                with open("ina219 log.txt", "w") as file:
+                    file.write(str(wh))
+                last_soc_save = time.ticks_ms()
+
+
+freq_number = 0
+freq_list = ['91.1', '92.7', '93.5', '95.0']
+def radio_frequency(freq):
+        freqB = 4 * (freq * 1000000 + 225000) / 32768
+        tea5767.writeto(0x60, bytearray([int(freqB) >> 8, int(freqB) & 0XFF, 0X90, 0X1E, 0X00]))
+def key1_frequency_up(pin):
+    global freq_number, key_debounce_timer
+    if time.ticks_diff(time.ticks_ms(), key_debounce_timer) < 300:
+        return
+    time.sleep_ms(5)
+    button_time = time.ticks_ms()
+    print('key 1')
+    
+    while True:
+        x = time.ticks_diff(time.ticks_ms(), button_time)
+        if key1()==1:
+            break
+        
+        
+    if x < 2:
+        key_debounce_timer = time.ticks_ms()
+        return
+    
+    if freq_number > 2:
+        freq_number = 0
+    
+    else:
+        freq_number = freq_number+1
+        
+    LCD.text(font2,'freq: ' + str(freq_list[freq_number]),42,55,gc9a01.WHITE)
+    print(freq_list[freq_number])
+    radio_frequency(float(freq_list[freq_number]))
+
+    key_debounce_timer = time.ticks_ms()
+
+
+
+if selected_mode == 3:
+    tea_available = True
+
+    try:
+        tea5767 = I2C(1, scl=Pin(7), sda=Pin(6))
+    except Exception as e:
+        print(e)
+        tea_available = False
+    
+    if tea_available == True: 
+        key1.irq(trigger=Pin.IRQ_FALLING, handler=key1_frequency_up)
+        try:
+            radio_frequency(float(freq_list[freq_number]))
+            LCD.text(font2,'freq: ' + str(freq_list[freq_number]),42,55,gc9a01.WHITE)
         except Exception as e:
             print(e)
+            LCD.text(font2,'TEA5767 error',42,55,gc9a01.WHITE)
+            
+    while True:
+        vbat = vbat_pin.read_u16()*3.3/65535*2
+        LCD.text(font1,"{:.2f}v".format(vbat),100,225,gc9a01.WHITE)
+        LCD.text(font1, "{:.1f}".format(bmp280_object.temperature) + 'C ' + "{:.0f}".format(altitude_IBF(bmp280_object.pressure * 0.01)) + 'M', 80, 215,gc9a01.WHITE)
 
+if selected_mode == 4:
+    i2c=I2C(1, sda=6, scl=7)
+    def scan_show():
+        
+        LCD.text(font2, modes[selected_mode], 90, 5,gc9a01.WHITE)
+        
+        devices = i2c.scan()
+        if len(devices) == 0:
+            LCD.text(font2,'NO I2C DEVICE',30,38,gc9a01.WHITE)
+        else:
+            LCD.text(font2,'i2c devices:' + str(len(devices)),30,38,gc9a01.WHITE)
+        
+        for device in devices:
+            LCD.text(font2,"Decimal:" + str(device) + " ,Hexa:" + str(hex(device)),30,55 + (18 * devices.index(device)),gc9a01.WHITE)
+    scan_show()
+    
+    while True:
+        if key1()==0:
+            LCD.fill(gc9a01.BLACK)
+            scan_show()
+            time.sleep_ms(300)
+        
+        
+        
